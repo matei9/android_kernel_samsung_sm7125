@@ -22,7 +22,7 @@ DO_REGEN=0 # Regenerate defconfig? 1 - yes, 0 - no
 DO_FLTO=0 # Full LTO? 1 - yes, 0 - no
 DO_A52Q=0 # Use Galaxy A52 defconfig? 1 - yes, 0 - no
 DO_A72Q=0 # Use Galaxy A72 defconfig? 1 - yes, 0 - no
-DO_KSU_DRIVER=0 # Shall script git clone a kernelsu driver? 1 - yes, 0 - no
+DO_KSU_DRIVER=1 # Shall script git clone a kernelsu driver? 1 - yes, 0 - no
 KSU_REPO="https://github.com/rsuntk/KernelSU" # KernelSU repository URL, default: RKSU
 KSU_BRANCH="main" # KernelSU branch to clone, default: main
 LOG_UPLOAD=0 # Upload log to bashupload.com? 1 - yes, 0 - no
@@ -464,8 +464,13 @@ prep_build() {
 }
     # Prepare KernelSU if needed
     if [[ "$DO_KSU_DRIVER" == "1" ]]; then
-        echo -e "INFO: KernelSU driver requested, cloning to $WP/KernelSU..."
+        echo "INFO: KernelSU: cloning driver to $WP/KernelSU..."
         git clone $KSU_REPO -b "$KSU_BRANCH" "$WP/KernelSU"
+        echo "INFO: KernelSU: modifying Makefile..."
+        grep -q "kernelsu" "drivers/Makefile" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "drivers/Makefile" 
+        echo "INFO: KernelSU: modifying Kconfig..."
+        grep -q "source \"drivers/kernelsu/Kconfig\"" "drivers/Kconfig" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "drivers/Kconfig" 
+        echo "INFO: KernelSU: done adding driver, make sure to add KSU hooks and enable CONFIG_KSU!"
     else
         echo "INFO: KernelSU driver not requested, skipping..."
     fi
