@@ -4,7 +4,7 @@
 # Based on build script for Quicksilver, by Ghostrider.
 # Copyright (C) 2020-2021 Adithya R. (original version)
 # Copyright (C) 2022-2025 Flopster101 (rewrite)
-# Copyright (C) 2025 notfleshka (modifications)
+# Copyright (C) 2025-2026 notfleshka (modifications)
 
 # Main Variables
 KERNEL_NAME="crDroid"    # Kernel's name
@@ -12,12 +12,7 @@ KERNEL_VER="4.14.356"     # Kernel's version
 BUILD_HOST="testamic-buildserver"     # Build host name
 EXTRA_NOTES="rksu"    # Extra notes to add to the zip name
 EXTRA_CONFIGS=()  # Extra config files to apply
-# EXTRA_CONFIGS+=("vendor/ksu.config") # Copied over with setup.sh
-# EXTRA_CONFIGS+=("vendor/apatch.config") # Copied over with setup.sh
-# EXTRA_CONFIGS+=("vendor/cert.config") # Copied over with setup.sh
-# EXTRA_CONFIGS+=("vendor/securities.config") # Copied over with setup.sh
-OUT_IMAGE="out/arch/arm64/boot/Image.gz"  # Kernel image path
-# OUT_IMAGE="out/arch/arm64/boot/Image.gz-dtb"  # Rarely used alternative kernel image path
+# EXTRA_CONFIGS+=("vendor/blablabla.config") # Example
 OUT_DTBO="out/arch/arm64/boot/dts/qcom/atoll-ab-idp.dtb" # DTBO path
 USE_CCACHE=1  # Use ccache? 1 - yes, 0 - no
 DO_CLEANUP=1 # Cleanup after build? 1 - yes, 0 - no
@@ -27,10 +22,24 @@ DO_REGEN=0 # Regenerate defconfig? 1 - yes, 0 - no
 DO_FLTO=0 # Full LTO? 1 - yes, 0 - no
 DO_A52Q=0 # Use Galaxy A52 defconfig? 1 - yes, 0 - no
 DO_A72Q=0 # Use Galaxy A72 defconfig? 1 - yes, 0 - no
+DO_KSU_DRIVER=1 # Shall script git clone a kernelsu driver? 1 - yes, 0 - no
+KSU_REPO="https://github.com/rsuntk/KernelSU" # KernelSU repository URL, default: RKSU
+KSU_BRANCH="main" # KernelSU branch to clone, default: main
 LOG_UPLOAD=0 # Upload log to bashupload.com? 1 - yes, 0 - no
 # LINKER="ld.lld" # Linker to use
 CLANG_TYPE="rm69" # Toolchain type: aosp, sdclang, proton, rm69, lolz, greenforce, zyc, rv, custom
-
+# AnyKernel3
+AK3_URL="https://github.com/notfleshka/AnyKernel3-A52-A72"
+AK3_BRANCH="master"
+AK3_DIR="$WP/AnyKernel3"
+# Local
+LOCAL=1 # Local build? 1 - yes, 0 - no
+if [[ "$LOCAL" == "1" ]]; then
+        echo "INFO: Local build enabled"
+        WP="$(pwd)"
+else
+        echo "INFO: Local build disabled, handled by your environment"
+fi
 
 ## Variables
 # Toolchains
@@ -46,11 +55,6 @@ ZC_REPO="https://raw.githubusercontent.com/ZyCromerZ/Clang/refs/heads/main/Clang
 RV_REPO="https://api.github.com/repos/Rv-Project/RvClang/releases/latest"
 GCC_REPO="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9"
 GCC64_REPO="https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9"
-# AnyKernel3
-AK3_URL="https://github.com/notfleshka/AnyKernel3-A52-A72"
-AK3_BRANCH="master"
-# Local
-WP="$(pwd)"
 
 # Custom toolchain directory
 if [[ -z "$CUST_DIR" ]]; then
@@ -94,7 +98,6 @@ RC_DIR="$WP/rm69clang"
 LZ_DIR="$WP/lolzclang"
 GCC_DIR="$WP/gcc"
 GCC64_DIR="$WP/gcc64"
-AK3_DIR="$WP/AnyKernel3"
 GC_DIR="$WP/greenforceclang"
 ZC_DIR="$WP/zycclang"
 RV_DIR="$WP/rvclang"
@@ -156,7 +159,7 @@ echo -e "\nINFO: Build info:
 - Device: $DEVICE ($CODENAME)
 - Kernel Name: $KERNEL_NAME
 - Kernel Version: $KERNEL_VER
-= Notes: $EXTRA_NOTES
+- Notes: $EXTRA_NOTES
 - Extra configs: ${EXTRA_CONFIGS[*]:-None}
 - Linux version: $LINUX_VER
 - Defconfig: $DEFCONFIG
@@ -445,7 +448,7 @@ prep_toolchain "$CLANG_TYPE"
 
 
 prep_build() {
-    ## Prepare ccache
+    # Prepare ccache
     if [[ "$USE_CCACHE" == "1" ]]; then
         echo "INFO: ccache enabled"
         if [[ "$IS_GP" == "1" ]]; then
@@ -459,6 +462,18 @@ prep_build() {
     # Show compiler information
     echo -e "INFO: Compiler: $KBUILD_COMPILER_STRING\n"
 }
+    # Prepare KernelSU if needed
+    if [[ "$DO_KSU_DRIVER" == "1" ]]; then
+        echo "INFO: KernelSU: cloning driver to $WP/KernelSU..."
+        git clone $KSU_REPO -b "$KSU_BRANCH" "$WP/KernelSU"
+        echo "INFO: KernelSU: modifying Makefile..."
+        grep -q "kernelsu" "drivers/Makefile" || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> "drivers/Makefile" 
+        echo "INFO: KernelSU: modifying Kconfig..."
+        grep -q "source \"drivers/kernelsu/Kconfig\"" "drivers/Kconfig" || sed -i "/endmenu/i\source \"drivers/kernelsu/Kconfig\"" "drivers/Kconfig" 
+        echo "INFO: KernelSU: done adding driver, make sure to add KSU hooks and enable CONFIG_KSU!"
+    else
+        echo "INFO: KernelSU driver not requested, skipping..."
+    fi
 
 build() {
     export LLVM=1 LLVM_IAS=1
@@ -546,7 +561,7 @@ post_build() {
 
     # If local AK3 copy exists, assume testing.
     if [[ -d "$AK3_DIR" ]]; then
-        AK3_TEST=1
+        AK3_TEST=1  # Doesn't do anything from stock, but can be useful
         echo -e "\nINFO: AK3_TEST flag set because local AnyKernel3 dir was found"
     else
         if ! git clone -q --depth=1 -b "$AK3_BRANCH" "$AK3_URL" "$AK3_DIR"; then
@@ -558,7 +573,6 @@ post_build() {
     ## Copy the built binaries
     cp "$OUT_IMAGE" "$AK3_DIR"
     cp "$OUT_DTBO" "$AK3_DIR"
-    rm -f *zip
 
     ## Prepare kernel flashable zip
     cd "$AK3_DIR" || { echo "ERROR: Failed to cd to $AK3_DIR"; }
