@@ -27,6 +27,9 @@ DO_REGEN=0 # Regenerate defconfig? 1 - yes, 0 - no
 DO_FLTO=0 # Full LTO? 1 - yes, 0 - no
 DO_A52Q=0 # Use Galaxy A52 defconfig? 1 - yes, 0 - no
 DO_A72Q=0 # Use Galaxy A72 defconfig? 1 - yes, 0 - no
+DO_KSU_DRIVER=0 # Shall script git clone a kernelsu driver? 1 - yes, 0 - no
+KSU_REPO="https://github.com/rsuntk/KernelSU" # KernelSU repository URL, default: RKSU
+KSU_BRANCH="main" # KernelSU branch to clone, default: main
 LOG_UPLOAD=0 # Upload log to bashupload.com? 1 - yes, 0 - no
 # LINKER="ld.lld" # Linker to use
 CLANG_TYPE="rm69" # Toolchain type: aosp, sdclang, proton, rm69, lolz, greenforce, zyc, rv, custom
@@ -459,6 +462,13 @@ prep_build() {
     # Show compiler information
     echo -e "INFO: Compiler: $KBUILD_COMPILER_STRING\n"
 }
+    # Prepare KernelSU if needed
+    if [[ "$DO_KSU_DRIVER" == "1" ]]; then
+        echo -e "INFO: KernelSU driver requested, cloning to $WP/KernelSU..."
+        git clone $KSU_REPO -b "$KSU_BRANCH" "$WP/KernelSU"
+    else
+        echo "INFO: KernelSU driver not requested, skipping..."
+    fi
 
 build() {
     export LLVM=1 LLVM_IAS=1
