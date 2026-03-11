@@ -32,7 +32,6 @@ CLANG_TYPE="rm69" # Toolchain type: aosp, sdclang, proton, rm69, lolz, greenforc
 # AnyKernel3
 AK3_URL="https://github.com/notfleshka/AnyKernel3-A52-A72"
 AK3_BRANCH="master"
-AK3_DIR="$WP/AnyKernel3"
 # Local
 LOCAL=1 # Local build? 1 - yes, 0 - no
 if [[ "$LOCAL" == "1" ]]; then
@@ -42,6 +41,7 @@ else
         echo "INFO: Local build disabled, handled by your environment"
 fi
 
+AK3_DIR="$WP/AnyKernel3"
 ## Variables
 # Toolchains
 AOSP_REPO="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/master"
