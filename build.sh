@@ -12,6 +12,7 @@ KERNEL_VER="4.14.356"     # Kernel's version
 BUILD_HOST="testamic-buildserver"     # Build host name
 EXTRA_NOTES="rksu"    # Extra notes to add to the zip name
 EXTRA_CONFIGS=()  # Extra config files to apply
+OUT_IMAGE="out/arch/arm64/boot/Image.gz"  # Kernel image path
 # EXTRA_CONFIGS+=("vendor/blablabla.config") # Example
 OUT_DTBO="out/arch/arm64/boot/dts/qcom/atoll-ab-idp.dtb" # DTBO path
 USE_CCACHE=1  # Use ccache? 1 - yes, 0 - no
