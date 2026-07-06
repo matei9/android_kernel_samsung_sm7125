@@ -1617,8 +1617,13 @@ static void input_seq_print_bitmap(struct seq_file *seq, const char *name,
 static int input_devices_seq_show(struct seq_file *seq, void *v)
 {
 	struct input_dev *dev = container_of(v, struct input_dev, node);
-	const char *path = kobject_get_path(&dev->dev.kobj, GFP_KERNEL);
+	const char *path;
 	struct input_handle *handle;
+
+	if (dev->going_away)
+		return 0;
+
+	path = kobject_get_path(&dev->dev.kobj, GFP_KERNEL);
 
 	seq_printf(seq, "I: Bus=%04x Vendor=%04x Product=%04x Version=%04x\n",
 		   dev->id.bustype, dev->id.vendor, dev->id.product, dev->id.version);
