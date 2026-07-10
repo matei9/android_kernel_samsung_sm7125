@@ -728,6 +728,9 @@ endif
 LLVM_AR		:= llvm-ar
 LLVM_NM		:= llvm-nm
 export LLVM_AR LLVM_NM
+export CC_IS_CLANG=y
+export AS_IS_LLVM=y
+export LD_IS_LLD=y
 endif
 
 # The arch Makefile can set ARCH_{CPP,A,C}FLAGS to override the default
