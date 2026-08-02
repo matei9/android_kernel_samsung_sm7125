@@ -1233,6 +1233,15 @@ config CC_OPTIMIZE_FOR_SIZE
 
 endchoice
 
+config CC_IS_CLANG
+	def_bool y
+
+config LD_IS_LLD
+	def_bool y
+
+config AS_IS_LLVM
+	def_bool y
+
 config SYSCTL
 	bool
 
