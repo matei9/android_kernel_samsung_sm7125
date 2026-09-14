@@ -11,7 +11,7 @@
 KERNEL_NAME="crDroid"    # Kernel's name
 KERNEL_VER="4.14.357"     # Kernel's version
 BUILD_HOST="testamic-buildserver"     # Build host name
-EXTRA_NOTES="RESS"    # Extra notes to add to the zip name
+EXTRA_NOTES="RESS-nomount"    # Extra notes to add to the zip name
 EXTRA_CONFIGS=(kernelsu.config)  # Extra config files to apply
 # EXTRA_CONFIGS+=("vendor/ksu.config") # Copied over with setup.sh
 # EXTRA_CONFIGS+=("vendor/apatch.config") # Copied over with setup.sh
