@@ -20,7 +20,7 @@ EXTRA_CONFIGS=(kernelsu.config)  # Extra config files to apply
 OUT_IMAGE="out/arch/arm64/boot/Image.gz"  # Kernel image path
 # OUT_IMAGE="out/arch/arm64/boot/Image.gz-dtb"  # Rarely used alternative kernel image path
 OUT_DTBO="out/arch/arm64/boot/dts/qcom/atoll-ab-idp.dtb" # DTBO path
-USE_CCACHE=1  # Use ccache? 1 - yes, 0 - no
+USE_CCACHE=${USE_CCACHE:-1}  # Use ccache? 1 - yes, 0 - no (override with env, e.g. USE_CCACHE=0 in CI)
 DO_CLEANUP=1 # Cleanup after build? 1 - yes, 0 - no
 DO_CLEAN=1 # Clean build? 1 - yes, 0 - no
 DO_MENUCONFIG=0 # Use Menuconfig? 1 - yes, 0 - no
@@ -166,22 +166,9 @@ echo -e "\nINFO: Build info:
 - Clean build: $([ "$DO_CLEAN" -eq 1 ] && echo "Yes" || echo "No")
 "
 
-install_deps_deb() {
-    # Dependencies
-    UB_DEPLIST="make(4.3) lz4 brotli flex bc cpio kmod ccache zip libtinfo5 python3 libssl-dev"
-        echo "INFO: Make sure you have these dependencies installed before proceeding: $UB_DEPLIST"
-        echo "INFO: Names of these dependencies are for Ubuntu/Debian-based distros, please check how are they called on other distros."
-        read -p "Are these dependencies installed? (y/n): " confirm
-        case "${confirm,,}" in
-            y|yes)
-                echo "INFO: Continuing..."
-                ;;
-            *)
-                echo "ERROR: Please install the dependencies manually before proceeding."
-                exit 1
-                ;;
-        esac
-}
+# NOTE: make sure the build dependencies are installed before running this script
+# (Ubuntu/Debian: make lz4 brotli flex bc cpio kmod ccache zip libtinfo5 python3 libssl-dev).
+# The GitHub Actions workflow installs them via apt; no interactive check is done here.
 
 get_toolchain() {
     local toolchain_type="$1"
@@ -439,8 +426,7 @@ prep_toolchain() {
     fi
 }
 
-## Pre-build dependencies
-install_deps_deb
+## Pre-build dependencies (see note at the top of the toolchain section)
 get_toolchain "$CLANG_TYPE"
 prep_toolchain "$CLANG_TYPE"
 

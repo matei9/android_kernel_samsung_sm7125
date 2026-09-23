@@ -1,0 +1,226 @@
+name: Build RESS-nomount kernel
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      build_a52q:
+        description: 'Build for Galaxy A52 (a52q)'
+        type: boolean
+        required: true
+        default: true
+      build_a72q:
+        description: 'Build for Galaxy A72 (a72q)'
+        type: boolean
+        required: true
+        default: true
+      release:
+        description: 'Upload release'
+        type: boolean
+        required: true
+        default: true
+      changelog:
+        description: 'Changelog'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync ReSukiSU / NoMount to upstream
+    runs-on: ubuntu-latest
+    outputs:
+      ksu_sha: ${{ steps.pins.outputs.ksu_sha }}
+      nomount_sha: ${{ steps.pins.outputs.nomount_sha }}
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Update submodules to upstream tip
+        run: |
+          git submodule update --recursive --remote
+          git status --short
+          git diff --stat
+
+      - name: Commit and push if changed
+        id: push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          CHANGED=false
+          if ! git diff --quiet HEAD -- KernelSU; then
+            KSU_SHORT="$(git -C KernelSU rev-parse --short HEAD)"
+            git add KernelSU
+            git commit -m "ReSukiSU: update to upstream ($KSU_SHORT)"
+            CHANGED=true
+          else
+            echo "ReSukiSU already at upstream tip."
+          fi
+          if ! git diff --quiet HEAD -- NoMount; then
+            NOMOUNT_SHORT="$(git -C NoMount rev-parse --short HEAD)"
+            git add NoMount
+            git commit -m "NoMount: update to upstream ($NOMOUNT_SHORT)"
+            CHANGED=true
+          else
+            echo "NoMount already at upstream tip."
+          fi
+          if [ "$CHANGED" = true ]; then
+            git push origin "HEAD:${{ github.ref_name }}"
+          else
+            echo "Nothing to push."
+          fi
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+
+      - name: Record submodule pins
+        id: pins
+        run: |
+          echo "ksu_sha=$(git submodule status KernelSU | awk '{print $1}' | tr -d '+-')" >> "$GITHUB_OUTPUT"
+          echo "nomount_sha=$(git submodule status NoMount | awk '{print $1}' | tr -d '+-')" >> "$GITHUB_OUTPUT"
+
+      - name: Select build targets
+        id: targets
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MATRIX='["a52q", "a72q"]'
+          else
+            MATRIX="["
+            if [ "${{ inputs.build_a52q }}" = "true" ]; then
+              MATRIX="$MATRIX\"a52q\""
+            fi
+            if [ "${{ inputs.build_a72q }}" = "true" ]; then
+              if [ "$MATRIX" != "[" ]; then
+                MATRIX="$MATRIX, "
+              fi
+              MATRIX="$MATRIX\"a72q\""
+            fi
+            MATRIX="$MATRIX]"
+            if [ "$MATRIX" = "[]" ]; then
+              echo "ERROR: select at least one device (a52q and/or a72q)."
+              exit 1
+            fi
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Building for: $MATRIX"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: sync
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.sync.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            curl \
+            wget \
+            unzip \
+            zip \
+            zstd \
+            make \
+            lz4 \
+            brotli \
+            flex \
+            bison \
+            bc \
+            cpio \
+            kmod \
+            ccache \
+            python3 \
+            libssl-dev \
+            libncurses-dev \
+            pkg-config
+
+      - name: Cache RastaMod69 toolchain
+        uses: actions/cache@v4
+        with:
+          path: rm69clang
+          key: rm69-${{ hashFiles('build.sh') }}
+
+      - name: Build kernel
+        env:
+          USE_CCACHE: "0"
+        run: |
+          bash build.sh ${{ matrix.target }}
+          cp out/include/config/kernel.release kernel.release-${{ matrix.target }}
+          ls -lh ./*.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ matrix.target }}
+          path: |
+            crDroid-${{ matrix.target }}-*.zip
+            kernel.release-${{ matrix.target }}
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-${{ matrix.target }}
+          path: log.txt
+
+  release:
+    name: Publish GitHub release
+    if: inputs.release == true || github.event_name == 'schedule'
+    needs: [sync, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kernel-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Verify artifacts
+        run: |
+          find artifacts -type f
+
+      - name: Generate release version
+        id: ts
+        run: |
+          echo "release_ts=ress-nomount-$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+          : > version.txt
+          KERNEL_RELEASE="$(cat artifacts/kernel.release-a52q 2>/dev/null || cat artifacts/kernel.release-a72q)"
+          echo "**Kernel version:** $KERNEL_RELEASE  " >> version.txt
+          echo >> version.txt
+          echo "**Kernel source:** [${{ github.sha }}](https://github.com/${{ github.repository }}/tree/${{ github.sha }})  " >> version.txt
+          echo >> version.txt
+          echo "**ReSukiSU:** [\`${{ needs.sync.outputs.ksu_sha }}\`](https://github.com/ReSukiSU/ReSukiSU/commit/${{ needs.sync.outputs.ksu_sha }})  " >> version.txt
+          echo "**NoMount:** [\`${{ needs.sync.outputs.nomount_sha }}\`](https://github.com/maxsteeel/nomount/commit/${{ needs.sync.outputs.nomount_sha }})  " >> version.txt
+
+          if [ -n "${{ inputs.changelog }}" ]; then
+            echo >> version.txt
+            echo "**Changelog:**" >> version.txt
+            echo >> version.txt
+            printf "%b\n" "${{ inputs.changelog }}" >> version.txt
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: version.txt
+          tag_name: "${{ steps.ts.outputs.release_ts }}"
+          name: "RESS-nomount-${{ steps.ts.outputs.release_ts }}"
+          files: artifacts/*.zip
