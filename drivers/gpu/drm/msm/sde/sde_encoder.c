@@ -3857,6 +3857,7 @@ static inline void _sde_encoder_trigger_flush(struct drm_encoder *drm_enc,
 
 #if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
 	struct samsung_display_driver_data *vdd;
+	bool fingermask_exclusive = false;
 	int wait_cnt = 200; /* (200 * 0.5ms) * 2 = 200ms */
 #endif
 
@@ -3903,6 +3904,7 @@ static inline void _sde_encoder_trigger_flush(struct drm_encoder *drm_enc,
 
 					/* Exclusive lock to prevent blink shot */
 					mutex_lock(&vdd->exclusive_tx.ex_tx_lock);
+					fingermask_exclusive = true;
 					vdd->exclusive_tx.enable = 1;
 
 					while (!list_empty(&vdd->cmd_lock.wait_list) && --wait_cnt)
@@ -3955,24 +3957,22 @@ static inline void _sde_encoder_trigger_flush(struct drm_encoder *drm_enc,
 	spin_unlock_irqrestore(&sde_enc->enc_spinlock, lock_flags);
 
 #if defined(CONFIG_DISPLAY_SAMSUNG_LEGO)
-	if (sde_encoder_check_curr_mode(drm_enc, MSM_DISPLAY_VIDEO_MODE)
-			&& (sde_enc->crtc)) {
-		if (vdd) {
-			SDE_DEBUG("[FINGER MASK]mask state:%d updated:%d.....wait_cnt:%d\n",
-				 vdd->finger_mask, vdd->finger_mask_updated, wait_cnt);
+	/* Release only from what this call took. Re-checking the panel mode
+	 * here is racy: it may change while the flush is in flight, skipping
+	 * brightness restoration and leaking ex_tx_lock.
+	 */
+	if (fingermask_exclusive) {
+		SDE_DEBUG("[FINGER MASK]mask state:%d updated:%d.....wait_cnt:%d\n",
+			 vdd->finger_mask, vdd->finger_mask_updated, wait_cnt);
 
-			/* If video mode, opt, fingermask off */
-			if (vdd->support_optical_fingerprint && vdd->finger_mask_updated && !vdd->finger_mask) {
-				ss_brightness_dcs(vdd, 0, BACKLIGHT_FINGERMASK_OFF);
+		ss_brightness_dcs(vdd, 0, BACKLIGHT_FINGERMASK_OFF);
 
-				/* Exclusive unlock to prevent blink shot */
-				ss_set_exclusive_tx_packet(vdd, TX_BRIGHT_CTRL, 0);
-				vdd->exclusive_tx.enable = 0;
-				wake_up_all(&vdd->exclusive_tx.ex_tx_waitq);
+		/* Exclusive unlock to prevent blink shot */
+		ss_set_exclusive_tx_packet(vdd, TX_BRIGHT_CTRL, 0);
+		vdd->exclusive_tx.enable = 0;
+		wake_up_all(&vdd->exclusive_tx.ex_tx_waitq);
 
-				mutex_unlock(&vdd->exclusive_tx.ex_tx_lock);
-			}
-		}
+		mutex_unlock(&vdd->exclusive_tx.ex_tx_lock);
 	}
 #endif
 
