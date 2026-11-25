@@ -1,0 +1,289 @@
+name: Build BakaSU-nomount kernel
+
+on:
+  schedule:
+    - cron: '0 8 * * 1'
+      timezone: Europe/Bucharest
+  workflow_dispatch:
+    inputs:
+      build_a52q:
+        description: 'Build for Galaxy A52 (a52q)'
+        type: boolean
+        required: true
+        default: true
+      build_a72q:
+        description: 'Build for Galaxy A72 (a72q)'
+        type: boolean
+        required: true
+        default: true
+      release:
+        description: 'Upload release'
+        type: boolean
+        required: true
+        default: true
+      changelog:
+        description: 'Changelog'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync crDroid kernel, BakaSU and NoMount
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      source_sha: ${{ steps.push.outputs.source_sha }}
+      ksu_sha: ${{ steps.pins.outputs.ksu_sha }}
+      nomount_sha: ${{ steps.pins.outputs.nomount_sha }}
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - name: Select build targets
+        id: targets
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            MATRIX='["a52q", "a72q"]'
+          else
+            MATRIX="["
+            if [ "${{ inputs.build_a52q }}" = "true" ]; then
+              MATRIX="$MATRIX\"a52q\""
+            fi
+            if [ "${{ inputs.build_a72q }}" = "true" ]; then
+              if [ "$MATRIX" != "[" ]; then
+                MATRIX="$MATRIX, "
+              fi
+              MATRIX="$MATRIX\"a72q\""
+            fi
+            MATRIX="$MATRIX]"
+            if [ "$MATRIX" = "[]" ]; then
+              echo "ERROR: select at least one device (a52q and/or a72q)."
+              exit 1
+            fi
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Building for: $MATRIX"
+
+      - name: Checkout latest branch tip
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Rebase fork commits onto the crDroid default branch
+        id: upstream
+        env:
+          UPSTREAM_URL: https://github.com/crdroidandroid/android_kernel_samsung_sm7125
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BEFORE="$(git rev-parse HEAD)"
+          echo "before=$BEFORE" >> "$GITHUB_OUTPUT"
+          git fetch --no-tags --no-recurse-submodules "$UPSTREAM_URL" HEAD
+          UPSTREAM="$(git rev-parse FETCH_HEAD)"
+
+          NOTES="$RUNNER_TEMP/crdroid-upstream.md"
+          printf '**Added from the crDroid SM7125 kernel:**\n\n' > "$NOTES"
+          if git merge-base --is-ancestor "$UPSTREAM" "$BEFORE"; then
+            echo "No new upstream commits." >> "$NOTES"
+          else
+            if ! git merge-base "$BEFORE" "$UPSTREAM" > /dev/null; then
+              echo "::error::The crDroid default branch has no common history with this branch."
+              exit 1
+            fi
+            git log --reverse --topo-order --format="- %s ([%h]($UPSTREAM_URL/commit/%H))" \
+              "$BEFORE..$UPSTREAM" >> "$NOTES"
+            # During rebase, "theirs" is the fork commit being replayed.
+            if ! git rebase --rebase-merges -X theirs "$UPSTREAM"; then
+              echo "::error::Could not automatically rebase onto crDroid ($UPSTREAM). The remote branch was not changed."
+              exit 1
+            fi
+            if ! git diff --quiet "$BEFORE" HEAD -- .github/workflows; then
+              echo "::error::The rebase changes workflow files. Review and rebase manually."
+              exit 1
+            fi
+          fi
+
+      - name: Update BakaSU and NoMount to upstream tips
+        run: |
+          git submodule update --init --remote -- KernelSU NoMount
+          for path in KernelSU NoMount; do
+            sha="$(git -C "$path" rev-parse HEAD)"
+            if [ "$sha" = "$(git rev-parse "HEAD:$path")" ]; then
+              continue
+            fi
+            project="$path"
+            if [ "$path" = KernelSU ]; then
+              project=BakaSU
+            fi
+            short="$(git -C "$path" rev-parse --short "$sha")"
+            git add "$path"
+            git commit -m "$project: update to upstream ($short)"
+          done
+
+      - name: Push synced branch
+        id: push
+        env:
+          BEFORE: ${{ steps.upstream.outputs.before }}
+          # Optional, if GitHub rejects rewriting commits that touch workflows.
+          GH_TOKEN: ${{ secrets.KERNEL_SYNC_TOKEN || github.token }}
+        run: |
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          if [ "$SOURCE_SHA" != "$BEFORE" ]; then
+            # A rebase rewrites history; never overwrite a newer remote tip.
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push \
+              --force-with-lease="$GITHUB_REF:$BEFORE" origin "HEAD:$GITHUB_REF"
+          fi
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Record submodule pins
+        id: pins
+        run: |
+          echo "ksu_sha=$(git rev-parse HEAD:KernelSU)" >> "$GITHUB_OUTPUT"
+          echo "nomount_sha=$(git rev-parse HEAD:NoMount)" >> "$GITHUB_OUTPUT"
+
+      - name: Save crDroid changelog
+        if: inputs.release == true || github.event_name == 'schedule'
+        uses: actions/upload-artifact@v6
+        with:
+          name: crdroid-upstream-notes
+          path: ${{ runner.temp }}/crdroid-upstream.md
+          if-no-files-found: error
+          overwrite: true
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: sync
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.sync.outputs.matrix) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.sync.outputs.source_sha }}
+          submodules: recursive
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            curl \
+            wget \
+            unzip \
+            zip \
+            zstd \
+            make \
+            lz4 \
+            brotli \
+            flex \
+            bison \
+            bc \
+            cpio \
+            kmod \
+            ccache \
+            python3 \
+            libssl-dev \
+            libncurses-dev \
+            pkg-config
+
+      - name: Cache RastaMod69 toolchain
+        uses: actions/cache@v5
+        with:
+          path: rm69clang
+          key: rm69-${{ hashFiles('build.sh') }}
+
+      - name: Build kernel
+        env:
+          USE_CCACHE: "0"
+        run: |
+          bash build.sh ${{ matrix.target }}
+          cp out/include/config/kernel.release kernel.release-${{ matrix.target }}
+          ls -lh ./*.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: kernel-${{ matrix.target }}
+          path: |
+            crDroid-${{ matrix.target }}-*.zip
+            kernel.release-${{ matrix.target }}
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: log-${{ matrix.target }}
+          path: log.txt
+
+  release:
+    name: Publish GitHub release
+    if: inputs.release == true || github.event_name == 'schedule'
+    needs: [sync, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: kernel-*
+          path: artifacts
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: crdroid-upstream-notes
+          path: release-notes
+
+      - name: Verify artifacts
+        run: |
+          find artifacts -type f
+
+      - name: Generate release version
+        id: ts
+        env:
+          SOURCE_SHA: ${{ needs.sync.outputs.source_sha }}
+          KSU_SHA: ${{ needs.sync.outputs.ksu_sha }}
+          NOMOUNT_SHA: ${{ needs.sync.outputs.nomount_sha }}
+          CHANGELOG: ${{ inputs.changelog }}
+        run: |
+          echo "release_ts=BakaSU-nomount-$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+          KERNEL_RELEASE="$(cat artifacts/kernel.release-a52q 2>/dev/null || cat artifacts/kernel.release-a72q)"
+          {
+            printf '**Kernel version:** %s\n\n' "$KERNEL_RELEASE"
+            printf '**Kernel source:** [%s](https://github.com/%s/tree/%s)\n\n' \
+              "$SOURCE_SHA" "$GITHUB_REPOSITORY" "$SOURCE_SHA"
+            printf "**BakaSU:** [\`%s\`](https://github.com/Baka-SU/BakaSU/commit/%s)  \n" "$KSU_SHA" "$KSU_SHA"
+            printf "**NoMount:** [\`%s\`](https://github.com/maxsteeel/nomount/commit/%s)\n\n" \
+              "$NOMOUNT_SHA" "$NOMOUNT_SHA"
+            cat release-notes/crdroid-upstream.md
+            if [ -n "$CHANGELOG" ]; then
+              printf '\n**Changelog:**\n\n%b\n' "$CHANGELOG"
+            fi
+          } > version.txt
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          body_path: version.txt
+          tag_name: "${{ steps.ts.outputs.release_ts }}"
+          target_commitish: ${{ needs.sync.outputs.source_sha }}
+          name: "${{ steps.ts.outputs.release_ts }}"
+          files: artifacts/*.zip
